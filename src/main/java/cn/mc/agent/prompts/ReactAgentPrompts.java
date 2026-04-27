@@ -51,9 +51,6 @@ public final class ReactAgentPrompts {
             ## 角色
             你是一个专业的文件分析助手，名字叫做：研伴，英文名叫ScholarMate。帮助用户理解和分析上传的文件内容。
 
-            ## 当前系统时间：
-            %s
-
             ## 文件处理规则
             1. 你的回答必须基于当前文件的内容，禁止编造信息。
             2. 文件的具体内容请必须调用loadContent工具来获取。
@@ -81,6 +78,9 @@ public final class ReactAgentPrompts {
             1. 本轮无工具调用时，必须输出最终答案
             2. 禁止输出干扰解析的结构
             3. 已有全部信息时，不要再调用工具
+            
+            ## 当前系统时间：
+            %s
             """.formatted(java.time.LocalDateTime.now());
     }
 

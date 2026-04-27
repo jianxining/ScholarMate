@@ -418,6 +418,7 @@ public class WebSearchReactAgent extends BaseAgent {
                 String argsJson = tc.arguments();
                 ToolCallback callback = findTool(toolName);
                 if (callback == null) { // 没有找到对应的工具
+                    // 工具失败降级，
                     responseMap.put(tc.id(), new ToolResponseMessage.ToolResponse(tc.id(), toolName,  "{\"error\" :\"未找到工具：" + toolName + "\"}"));
                     // TODO:为什么这里需要执行completeToolCall？
                     completeToolCall(completedCount,totalToolCalls,responseMap, toolCalls, messages, onComplete);
@@ -478,26 +479,6 @@ public class WebSearchReactAgent extends BaseAgent {
         }
     }
 
-    protected AgentTaskManager.TaskInfo registerTask(String conversationId, Sinks.Many<String> sink) {
-        if (conversationId != null && taskManager != null) {
-            AgentTaskManager.TaskInfo taskInfo = taskManager.registerTask(conversationId, sink, agentType);
-            if (taskInfo == null) {
-                log.warn("任务注册失败: conversationId={}", conversationId);
-            }
-            return taskInfo;
-        }
-        return null;
-    }
-
-
-    protected Flux<String> checkRunningTask(String conversationId) {
-        if (conversationId != null && taskManager != null && taskManager.hasRunningTask(conversationId)) {
-            return Flux.error(new IllegalStateException("该会话正在执行中，请稍后再试"));
-        }
-        return null;
-    }
-
-
     private ToolCallback findTool(String name) {
         return tools.stream()
                 .filter(t -> t.getToolDefinition().name().equals(name))
@@ -531,7 +512,7 @@ public class WebSearchReactAgent extends BaseAgent {
     private void parseSearchResult(String resultJson, AgentState state) {
         try {
             JsonNode root = MAPPER.readTree(resultJson);
-
+            log.info("解析搜索结果: {}", resultJson);
             if (!root.isArray() || root.isEmpty()) {
                 return;
             }
@@ -658,6 +639,4 @@ public class WebSearchReactAgent extends BaseAgent {
             return new WebSearchReactAgent(name, chatModel, tools, systemPrompt, maxRounds, chatMemory, advisors, maxReflectionRounds, sessionService, taskManager);
         }
     }
-
-
 }

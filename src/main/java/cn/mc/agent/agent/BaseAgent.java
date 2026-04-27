@@ -23,6 +23,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.core.ParameterizedTypeReference;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -171,6 +172,24 @@ public abstract class BaseAgent {
             log.error("生成推荐问题异常", e);
             return null;
         }
+    }
+
+    protected Flux<String> checkRunningTask(String conversationId) {
+        if (conversationId != null && taskManager != null && taskManager.hasRunningTask(conversationId)) {
+            return Flux.error(new IllegalStateException("该会话正在执行中，请稍后再试"));
+        }
+        return null;
+    }
+
+    protected AgentTaskManager.TaskInfo registerTask(String conversationId, Sinks.Many<String> sink) {
+        if (conversationId != null && taskManager != null) {
+            AgentTaskManager.TaskInfo taskInfo = taskManager.registerTask(conversationId, sink, agentType);
+            if (taskInfo == null) {
+                log.warn("任务注册失败: conversationId={}", conversationId);
+            }
+            return taskInfo;
+        }
+        return null;
     }
 
     public ChatMemory createPersistentChatMemory(String sessionId, int maxMessages) {

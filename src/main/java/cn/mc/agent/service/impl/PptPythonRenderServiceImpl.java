@@ -62,8 +62,11 @@ public class PptPythonRenderServiceImpl implements PptPythonRenderService {
         }
 
         // ---------- 构建命令 ----------
+        // 使用项目虚拟环境中的 Python（包含 python-pptx 等依赖）
+        String venvPython = System.getProperty("user.dir") + "/.venv/bin/python3";
+
         List<String> command = List.of(
-                "python",
+                venvPython,
                 pythonScriptPath,
                 "--template", templateFilePath,
                 "--output", outputFilePath
@@ -173,7 +176,7 @@ public class PptPythonRenderServiceImpl implements PptPythonRenderService {
      * 获取Python脚本路径
      */
     private String getPythonScriptPath() {
-        return "D:\\LLMentor\\LLMentor\\agent\\dodo-agent\\src\\main\\resources\\python\\render_ppt.py";
+        return "/Users/tmengchun/ScholarMate/src/main/resources/python/render_ppt.py";
     }
 
     /**

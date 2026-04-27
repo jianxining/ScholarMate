@@ -1,6 +1,6 @@
 package cn.mc.agent.agent.pptx.strategy;
 
-import cn.mc.agent.agent.SimpleReactAgent;
+import cn.mc.agent.agent.deepresearch.SimpleReactAgent;
 import cn.mc.agent.entity.record.pptx.AiPptInst;
 import cn.mc.agent.entity.record.pptx.PptInstStatus;
 import cn.mc.agent.prompts.PptBuilderPrompts;

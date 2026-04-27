@@ -1,7 +1,9 @@
 package cn.mc.agent.controller;
 
 
+import cn.mc.agent.agent.deepresearch.PlanExecuteAgent;
 import cn.mc.agent.agent.file.FileReactAgent;
+import cn.mc.agent.agent.pptx.PPTBuilderAgent;
 import cn.mc.agent.agent.webSearch.WebSearchReactAgent;
 import cn.mc.agent.service.AgentTaskManager;
 import cn.mc.agent.service.AiSessionService;
@@ -112,6 +114,52 @@ public class AgentController implements InitializingBean {
         }
     }
 
+    @GetMapping(value = "/pptx/stream", produces = "text/event-stream;charset=UTF-8")
+    @Operation(summary = "PPT 生成", description = "接收用户需求并返回流式响应，基于模板驱动生成PPT")
+    public Flux<String> pptxStream(@RequestParam(required = true) String query,
+                                   @RequestParam(required = true) String conversationId) {
+        log.info("收到PPT Builder请求: query={}, conversationId={}", query, conversationId);
+
+        if (query == null || query.trim().isEmpty()) {
+            log.warn("查询参数为空或无效");
+            return Flux.error(new IllegalArgumentException("查询参数不能为空"));
+        }
+
+        try {
+            PPTBuilderAgent pptBuilderAgent = initPPTBuilderAgent();
+            // 使用持久化记忆加载历史记录
+            ChatMemory persistentMemory = pptBuilderAgent.createPersistentChatMemory(conversationId, 30);
+            pptBuilderAgent.setChatMemory(persistentMemory);
+            return pptBuilderAgent.execute(conversationId, query);
+        } catch (Exception e) {
+            log.error("处理PPT Builder请求时发生错误: ", e);
+            return Flux.error(e);
+        }
+    }
+
+    @GetMapping(value = "/deep/stream", produces = "text/event-stream;charset=UTF-8")
+    @Operation(summary = "深度研究", description = "接收用户查询并返回流式响应，使用计划-执行模式进行深度研究")
+    public Flux<String> deepStream(@RequestParam(required = true) String query,
+                                   @RequestParam(required = true) String conversationId) {
+        log.info("收到深度研究请求: query={}, conversationId={}", query, conversationId);
+
+        if (query == null || query.trim().isEmpty()) {
+            log.warn("查询参数为空或无效");
+            return Flux.error(new IllegalArgumentException("查询参数不能为空"));
+        }
+
+        try {
+            PlanExecuteAgent planExecuteAgent = initPlanExecuteAgent();
+            // 使用持久化记忆加载历史记录
+            ChatMemory persistentMemory = planExecuteAgent.createPersistentChatMemory(conversationId, 30);
+            planExecuteAgent.setChatMemory(persistentMemory);
+            return planExecuteAgent.stream(conversationId, query);
+        } catch (Exception e) {
+            log.error("处理深度研究请求时发生错误: ", e);
+            return Flux.error(e);
+        }
+    }
+
 
 
     @Override
@@ -194,6 +242,34 @@ public class AgentController implements InitializingBean {
                 .tools(allTools)
                 .sessionService(sessionService)
                 .taskManager(taskManager)
+                .build();
+    }
+
+    /**
+     * 初始化PPT Builder Agent
+     */
+    private PPTBuilderAgent initPPTBuilderAgent() {
+        log.info("初始化PPT Builder Agent...");
+
+        return new PPTBuilderAgent(
+                chatModel,
+                Arrays.asList(webSearchToolCallbacks),
+                sessionService,
+                taskManager);
+    }
+
+    /**
+     * 初始化 PlanExecute Agent
+     */
+    private PlanExecuteAgent initPlanExecuteAgent() {
+        log.info("初始化 PlanExecute Agent...");
+
+        return PlanExecuteAgent.builder()
+                .chatModel(chatModel)
+                .tools(webSearchToolCallbacks)
+                .sessionService(sessionService)
+                .taskManager(taskManager)
+                .maxRounds(3)
                 .build();
     }
 

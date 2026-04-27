@@ -55,11 +55,11 @@ spring:
       max-request-size: 50MB
 
 minio:
-  url: http://localhost:9002   # 记得改成你自己的
+  url: http://localhost:9002   # 对外可访问的地址（浏览器访问用，Docker部署时改为宿主机地址）
   accessKey: minioadmin # 记得改成你自己的
   secretKey: minioadmin # 记得改成你自己的
   bucketName: scholar-mate
-  endpoint: http://localhost:9002
+  endpoint: http://localhost:9002  # MinIO客户端连接地址（Docker内部用）
 
 embeddings:
   store:

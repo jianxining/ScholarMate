@@ -229,6 +229,20 @@ public abstract class BaseAgent {
         }
     }
 
+    /**
+     * 获取历史消息列表
+     *
+     * @param conversationId 会话ID
+     * @return 历史消息列表
+     */
+    protected List<Message> getChatHistory(String conversationId) {
+        if (conversationId != null && chatMemory != null) {
+            return chatMemory.get(conversationId);
+        }
+        return null;
+    }
+
+
     protected void recordUsedTool(String toolName) {
         if (usedTools != null && toolName != null) {
             usedTools.add(toolName);

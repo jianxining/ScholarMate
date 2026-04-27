@@ -52,6 +52,7 @@ public abstract class BaseAgent {
     protected String currentRecommendations;
 
     protected String currentQuestion;
+    protected String currentConversationId;
     protected Long currentSessionId;
 
     // 记录Agent在执行过程中使用过的工具

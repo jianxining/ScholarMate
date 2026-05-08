@@ -7,6 +7,7 @@ import cn.mc.agent.agent.pptx.PPTBuilderAgent;
 import cn.mc.agent.agent.webSearch.WebSearchReactAgent;
 import cn.mc.agent.service.AgentTaskManager;
 import cn.mc.agent.service.AiSessionService;
+import cn.mc.agent.service.EpisodicMemoryService;
 import cn.mc.agent.tool.FileContentService;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
@@ -57,6 +58,9 @@ public class AgentController implements InitializingBean {
 
     @Autowired
     private AgentTaskManager taskManager;
+
+    @Autowired
+    private EpisodicMemoryService episodicMemoryService;
 
     @Value("${tavily.api-key}")
     private String tavilyApiKey;
@@ -269,6 +273,7 @@ public class AgentController implements InitializingBean {
                 .tools(webSearchToolCallbacks)
                 .sessionService(sessionService)
                 .taskManager(taskManager)
+                .episodicMemoryService(episodicMemoryService)
                 .maxRounds(3)
                 .build();
     }

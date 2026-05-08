@@ -262,6 +262,49 @@ public final class PlanExecutePrompts {
             总字数不超过200字
             """;
 
+    public static final String EPISODIC_EXTRACTION = """
+            你是【事件记忆提取器】。
+
+            你的任务：从一段研究对话中提取结构化事件，用于后续对话的记忆检索。
+            这是给Agent用的事件索引，不是给人看的摘要。
+
+            ## 事件类型（必须严格使用这四种）
+            - TOPIC：研究了什么主题（1条）
+            - FINDING：关键发现或结论（2-4条）
+            - DIMENSION：覆盖的研究维度（1-2条）
+            - FAILURE：未解决的问题或数据缺失（0-1条，没有则不输出）
+
+            ## 提取原则
+            1. 每条事件 ≤50字，只保留核心信息
+            2. topic 字段填入 1-3 个关键词，用于后续检索（如"新能源汽车"、"供应链"）
+            3. 总共提取 5-8 条事件
+            4. 不提取：具体数字、论述过程、参考来源URL、报告格式
+
+            ## 输出格式（严格 JSON 数组，不要任何额外文本）
+            [
+              {
+                "type": "TOPIC",
+                "content": "研究了什么，一句话",
+                "topic": "关键词1,关键词2"
+              },
+              {
+                "type": "FINDING",
+                "content": "关键发现，一句话",
+                "topic": "关键词"
+              },
+              {
+                "type": "DIMENSION",
+                "content": "覆盖了哪些研究方向",
+                "topic": "关键词"
+              },
+              {
+                "type": "FAILURE",
+                "content": "未解决的问题",
+                "topic": "关键词"
+              }
+            ]
+            """;
+
     public static final String SUMMARIZE = """
             你是【DeepResearch 结果总结专家】。
 

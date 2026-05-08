@@ -6,6 +6,8 @@ import cn.mc.agent.entity.AiSession;
 import cn.mc.agent.prompts.ReactAgentPrompts;
 import cn.mc.agent.service.AgentTaskManager;
 import cn.mc.agent.service.AiSessionService;
+import cn.mc.agent.service.EpisodicMemoryService;
+import cn.mc.agent.entity.EpisodicEvent;
 import com.alibaba.fastjson2.JSON;
 import lombok.Builder;
 import lombok.Getter;
@@ -45,6 +47,7 @@ public abstract class BaseAgent {
     protected ChatMemory chatMemory;
     protected AiSessionService sessionService;
     protected AgentTaskManager taskManager;
+    protected EpisodicMemoryService episodicMemoryService;
 
     // 是否启用推荐问题功能
     protected boolean enableRecommendations = true;
@@ -194,7 +197,7 @@ public abstract class BaseAgent {
     }
 
     /**
-     * 最近 N 轮保留完整回答，更早的轮次使用摘要（如有）
+     * 最近 N 轮保留完整回答，更早的轮次使用事件记忆
      */
     private static final int FULL_MEMORY_ROUNDS = 3;
 
@@ -210,7 +213,7 @@ public abstract class BaseAgent {
         ChatMemory chatMemory = MessageWindowChatMemory.builder().maxMessages(maxMessages).build();
         // 将历史记录添加到 ChatMemory（按时间顺序）
         if (history != null && !history.isEmpty()) {
-            int summaryUsedCount = 0;
+            int episodicUsedCount = 0;
             // 反转历史记录顺序，确保按时间顺序添加
             for (int i = history.size() - 1; i >= 0; i--) {
                 AiSession record = history.get(i);
@@ -218,20 +221,56 @@ public abstract class BaseAgent {
                 if (record.getQuestion() != null) {
                     chatMemory.add(sessionId, new UserMessage(record.getQuestion()));
                 }
-                // 添加AI回复：近期完整，远期摘要
+                // 添加AI回复：近期完整，远期用事件记忆
                 if (record.getAnswer() != null) {
                     int distanceFromLatest = history.size() - 1 - i;
-                    if (distanceFromLatest >= FULL_MEMORY_ROUNDS && record.getSummary() != null) {
-                        chatMemory.add(sessionId, new AssistantMessage(record.getSummary()));
-                        summaryUsedCount++;
-                    } else {
-                        chatMemory.add(sessionId, new AssistantMessage(record.getAnswer()));
+                    if (distanceFromLatest >= FULL_MEMORY_ROUNDS && episodicMemoryService != null) {
+                        // 尝试从事件记忆加载
+                        String episodicContext = loadEpisodicContext(record.getSessionId());
+                        if (episodicContext != null) {
+                            chatMemory.add(sessionId, new AssistantMessage(episodicContext));
+                            episodicUsedCount++;
+                            continue;
+                        }
+                        // fallback 到 summary
+                        if (record.getSummary() != null) {
+                            chatMemory.add(sessionId, new AssistantMessage(record.getSummary()));
+                            episodicUsedCount++;
+                            continue;
+                        }
                     }
+                    chatMemory.add(sessionId, new AssistantMessage(record.getAnswer()));
                 }
             }
-            log.debug("加载会话历史: sessionId={}, recordCount={}, 使用摘要轮次={}", sessionId, history.size(), summaryUsedCount);
+            log.debug("加载会话历史: sessionId={}, recordCount={}, 使用事件记忆轮次={}", sessionId, history.size(), episodicUsedCount);
         }
         return chatMemory;
+    }
+
+    /**
+     * 从 episodic_memory 加载事件并格式化为上下文文本
+     */
+    private String loadEpisodicContext(String sessionId) {
+        try {
+            List<EpisodicEvent> events = episodicMemoryService.findBySessionId(sessionId);
+            if (events == null || events.isEmpty()) {
+                return null;
+            }
+            StringBuilder sb = new StringBuilder("[历史事件]\n");
+            for (EpisodicEvent event : events) {
+                switch (event.getEventType()) {
+                    case "TOPIC" -> sb.append("- 研究主题：").append(event.getContent()).append("\n");
+                    case "FINDING" -> sb.append("- 发现：").append(event.getContent()).append("\n");
+                    case "DIMENSION" -> sb.append("- 覆盖维度：").append(event.getContent()).append("\n");
+                    case "FAILURE" -> sb.append("- 未解决：").append(event.getContent()).append("\n");
+                    default -> sb.append("- ").append(event.getContent()).append("\n");
+                }
+            }
+            return sb.toString().trim();
+        } catch (Exception e) {
+            log.warn("加载事件记忆失败: sessionId={}", sessionId, e);
+            return null;
+        }
     }
 
     protected void recordFirstResponse() {

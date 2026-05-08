@@ -13,6 +13,7 @@ import cn.mc.agent.entity.response.SimpleReactResult;
 import cn.mc.agent.prompts.PlanExecutePrompts;
 import cn.mc.agent.service.AgentTaskManager;
 import cn.mc.agent.service.AiSessionService;
+import cn.mc.agent.service.EpisodicMemoryService;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -68,6 +69,9 @@ public class PlanExecuteAgent extends BaseAgent {
     // 存储所有搜索结果，用于保存到数据库和发送给前端
     private List<SearchResult> allReferences;
 
+    // 事件记忆服务
+    private EpisodicMemoryService episodicMemoryService;
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public PlanExecuteAgent(ChatModel chatModel,
@@ -77,7 +81,8 @@ public class PlanExecuteAgent extends BaseAgent {
                             int maxToolRetries,
                             ChatMemory chatMemory,
                             AiSessionService sessionService,
-                            AgentTaskManager taskManager) {
+                            AgentTaskManager taskManager,
+                            EpisodicMemoryService episodicMemoryService) {
         super(chatModel, "PlanExecuteAgent", "plan-execute");
         this.chatClient = ChatClient.builder(chatModel).build();
         this.tools = tools;
@@ -88,6 +93,7 @@ public class PlanExecuteAgent extends BaseAgent {
         this.chatMemory = chatMemory;
         this.sessionService = sessionService;
         this.taskManager = taskManager;
+        this.episodicMemoryService = episodicMemoryService;
 
         // 初始化工具记录集合
         this.usedTools = new HashSet<>();
@@ -116,6 +122,8 @@ public class PlanExecuteAgent extends BaseAgent {
 
         private AgentTaskManager taskManager;
 
+        private EpisodicMemoryService episodicMemoryService;
+
         public Builder sessionService(AiSessionService sessionService) {
             this.sessionService = sessionService;
             return this;
@@ -123,6 +131,11 @@ public class PlanExecuteAgent extends BaseAgent {
 
         public Builder taskManager(AgentTaskManager taskManager) {
             this.taskManager = taskManager;
+            return this;
+        }
+
+        public Builder episodicMemoryService(EpisodicMemoryService episodicMemoryService) {
+            this.episodicMemoryService = episodicMemoryService;
             return this;
         }
 
@@ -163,7 +176,7 @@ public class PlanExecuteAgent extends BaseAgent {
 
         public PlanExecuteAgent build() {
             Objects.requireNonNull(chatModel, "chatModel must not be null");
-            return new PlanExecuteAgent(chatModel, tools, maxRounds, contextCharLimit, maxToolRetries, chatMemory, sessionService, taskManager);
+            return new PlanExecuteAgent(chatModel, tools, maxRounds, contextCharLimit, maxToolRetries, chatMemory, sessionService, taskManager, episodicMemoryService);
         }
     }
 
@@ -538,13 +551,15 @@ public class PlanExecuteAgent extends BaseAgent {
             sessionService.updateAnswer(request);
             log.info("结果已保存到会话: sessionId={}, conversationId={}", currentSessionId, conversationId);
 
-            // 异步生成执行后摘要（不阻塞响应流）
+            // 异步生成事件记忆（不阻塞响应流）
             final Long sessionId = currentSessionId;
             Schedulers.boundedElastic().schedule(() -> {
                 try {
-                    sessionService.generateSummary(sessionId);
+                    if (episodicMemoryService != null) {
+                        episodicMemoryService.generateEvents(sessionId);
+                    }
                 } catch (Exception e) {
-                    log.error("异步摘要生成失败: sessionId={}", sessionId, e);
+                    log.error("异步事件记忆生成失败: sessionId={}", sessionId, e);
                 }
             });
         } catch (Exception e) {

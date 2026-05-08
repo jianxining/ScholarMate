@@ -14,9 +14,12 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Sinks;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -31,6 +34,8 @@ public class AgentTaskManager implements InitializingBean, DisposableBean {
     private static final String TASK_KEY_PREFIX = "agent:task:";
     private static final long TASK_TTL_MINUTES = 30;
     private static final String STOP_TOPIC_NAME = "agent:stop";
+
+    private static final long TTL_REFRESH_INTERVAL_MINUTES = 5;
 
     /**
      * 当前实例的唯一标识
@@ -48,6 +53,19 @@ public class AgentTaskManager implements InitializingBean, DisposableBean {
 
     private final Map<String, TaskInfo> taskMap = new ConcurrentHashMap<>();
 
+    /**
+     * TTL 刷新定时器
+     */
+    private final ScheduledExecutorService ttlRefreshScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "agent-ttl-refresh");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * 发布订阅监听器ID（用于销毁时移除）
+     */
+    private int listenerId;
 
 
     public AgentTaskManager(RedissonClient redissonClient) {
@@ -192,12 +210,80 @@ public class AgentTaskManager implements InitializingBean, DisposableBean {
 
     @Override
     public void destroy() throws Exception {
+        // 移除发布订阅监听器
+        try {
+            stopTopic.removeListener(listenerId);
+        } catch (Exception e) {
+            log.warn("移除发布订阅监听器失败", e);
+        }
 
+        // 关闭定时任务
+        ttlRefreshScheduler.shutdown();
+
+        // 清理所有本地任务（释放 Redis key）
+        for (String conversationId : taskMap.keySet()) {
+            doRemoveTask(conversationId);
+        }
+
+        log.info("AgentTaskManager 销毁完成, instanceId={}", instanceId);
     }
 
     @Override
     public void afterPropertiesSet() throws Exception {
+        // 订阅停止消息
+        listenerId = stopTopic.addListener(String.class, (channel, conversationId) -> {
+            handleRemoteStop(conversationId);
+        });
 
+        // 启动 TTL 刷新定时任务
+        ttlRefreshScheduler.scheduleAtFixedRate(
+                this::refreshTaskTtls,
+                TTL_REFRESH_INTERVAL_MINUTES,
+                TTL_REFRESH_INTERVAL_MINUTES,
+                TimeUnit.MINUTES
+        );
+
+        log.info("AgentTaskManager 启动完成, 已订阅停止主题, TTL刷新间隔={}分钟", TTL_REFRESH_INTERVAL_MINUTES);
+    }
+
+    /**
+     * 定时刷新本地所有运行中任务的 Redis TTL
+     * 防止长任务的 key 过期
+     */
+    private void refreshTaskTtls() {
+        if (taskMap.isEmpty()) {
+            return;
+        }
+
+        log.debug("开始刷新 TTL, 本地任务数={}", taskMap.size());
+        for (String conversationId : taskMap.keySet()) {
+            try {
+                RBucket<String> bucket = getTaskBucket(conversationId);
+                String holder = bucket.get();
+                if (instanceId.equals(holder)) {
+                    bucket.expire(Duration.ofMinutes(TASK_TTL_MINUTES));
+                } else {
+                    // Redis 中的 holder 不是本实例，说明 key 已被其他实例持有或已过期
+                    log.warn("TTL刷新发现 key 归属变化: conversationId={}, 期望={}, 实际={}",
+                            conversationId, instanceId, holder);
+                    taskMap.remove(conversationId);
+                }
+            } catch (Exception e) {
+                log.error("TTL刷新失败: conversationId={}", conversationId, e);
+            }
+        }
+    }
+
+    /**
+     * 处理远程停止请求（Pub/Sub 回调）
+     */
+    private void handleRemoteStop(String conversationId) {
+        TaskInfo taskInfo = taskMap.remove(conversationId);
+        if (taskInfo == null) {
+            return;
+        }
+        log.info("远程停止任务: conversationId={}, instanceId={}", conversationId, instanceId);
+        doStopTask(conversationId, taskInfo);
     }
 
     public static class TaskInfo {

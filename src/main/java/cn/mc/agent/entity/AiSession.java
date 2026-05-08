@@ -103,4 +103,10 @@ public class AiSession {
      */
     @TableField("recommend")
     private String recommend;
+
+    /**
+     * 执行后摘要（用于跨轮次中期记忆）
+     */
+    @TableField("summary")
+    private String summary;
 }

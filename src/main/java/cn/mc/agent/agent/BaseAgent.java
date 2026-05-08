@@ -193,6 +193,11 @@ public abstract class BaseAgent {
         return null;
     }
 
+    /**
+     * 最近 N 轮保留完整回答，更早的轮次使用摘要（如有）
+     */
+    private static final int FULL_MEMORY_ROUNDS = 3;
+
     public ChatMemory createPersistentChatMemory(String sessionId, int maxMessages) {
         if (sessionService == null) {
             log.warn("sessionService is null, cannot load chat memory");
@@ -205,6 +210,7 @@ public abstract class BaseAgent {
         ChatMemory chatMemory = MessageWindowChatMemory.builder().maxMessages(maxMessages).build();
         // 将历史记录添加到 ChatMemory（按时间顺序）
         if (history != null && !history.isEmpty()) {
+            int summaryUsedCount = 0;
             // 反转历史记录顺序，确保按时间顺序添加
             for (int i = history.size() - 1; i >= 0; i--) {
                 AiSession record = history.get(i);
@@ -212,12 +218,18 @@ public abstract class BaseAgent {
                 if (record.getQuestion() != null) {
                     chatMemory.add(sessionId, new UserMessage(record.getQuestion()));
                 }
-                // 添加AI回复
+                // 添加AI回复：近期完整，远期摘要
                 if (record.getAnswer() != null) {
-                    chatMemory.add(sessionId, new AssistantMessage(record.getAnswer()));
+                    int distanceFromLatest = history.size() - 1 - i;
+                    if (distanceFromLatest >= FULL_MEMORY_ROUNDS && record.getSummary() != null) {
+                        chatMemory.add(sessionId, new AssistantMessage(record.getSummary()));
+                        summaryUsedCount++;
+                    } else {
+                        chatMemory.add(sessionId, new AssistantMessage(record.getAnswer()));
+                    }
                 }
             }
-            log.debug("加载会话历史: sessionId={}, recordCount={}", sessionId, history.size());
+            log.debug("加载会话历史: sessionId={}, recordCount={}, 使用摘要轮次={}", sessionId, history.size(), summaryUsedCount);
         }
         return chatMemory;
     }

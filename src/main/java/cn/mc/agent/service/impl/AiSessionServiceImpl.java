@@ -4,16 +4,29 @@ import cn.mc.agent.entity.AiSession;
 import cn.mc.agent.entity.request.SaveQuestionRequest;
 import cn.mc.agent.entity.request.UpdateAnswerRequest;
 import cn.mc.agent.mapper.AiSessionMapper;
+import cn.mc.agent.prompts.PlanExecutePrompts;
 import cn.mc.agent.service.AiSessionService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
+@Slf4j
 @Service
 public class AiSessionServiceImpl extends ServiceImpl<AiSessionMapper, AiSession> implements AiSessionService {
+
+    private static final int SUMMARY_MIN_ANSWER_LENGTH = 2000;
+
+    private final ChatModel chatModel;
+
+    public AiSessionServiceImpl(ChatModel chatModel) {
+        this.chatModel = chatModel;
+    }
 
     @Override
     public List<AiSession> findRecentBySessionId(String sessionId, int maxRecords) {
@@ -67,6 +80,37 @@ public class AiSessionServiceImpl extends ServiceImpl<AiSessionMapper, AiSession
             return this.updateById(session);
         }
         return false;
+    }
+
+    @Override
+    public void generateSummary(Long sessionId) {
+        AiSession session = this.getById(sessionId);
+        if (session == null || session.getAnswer() == null) {
+            return;
+        }
+        if (session.getAnswer().length() < SUMMARY_MIN_ANSWER_LENGTH) {
+            return;
+        }
+        if (session.getSummary() != null && !session.getSummary().isBlank()) {
+            return;
+        }
+
+        try {
+            String summary = ChatClient.builder(chatModel).build()
+                    .prompt()
+                    .system(PlanExecutePrompts.SESSION_SUMMARY)
+                    .user(session.getAnswer())
+                    .call()
+                    .content();
+
+            if (summary != null && !summary.isBlank()) {
+                session.setSummary(summary);
+                this.updateById(session);
+                log.info("摘要生成成功: sessionId={}, 摘要长度={}", sessionId, summary.length());
+            }
+        } catch (Exception e) {
+            log.error("摘要生成失败: sessionId={}", sessionId, e);
+        }
     }
 
 }

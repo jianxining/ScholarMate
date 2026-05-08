@@ -537,6 +537,16 @@ public class PlanExecuteAgent extends BaseAgent {
                     .build();
             sessionService.updateAnswer(request);
             log.info("结果已保存到会话: sessionId={}, conversationId={}", currentSessionId, conversationId);
+
+            // 异步生成执行后摘要（不阻塞响应流）
+            final Long sessionId = currentSessionId;
+            Schedulers.boundedElastic().schedule(() -> {
+                try {
+                    sessionService.generateSummary(sessionId);
+                } catch (Exception e) {
+                    log.error("异步摘要生成失败: sessionId={}", sessionId, e);
+                }
+            });
         } catch (Exception e) {
             log.error("保存结果到会话失败", e);
         }

@@ -38,6 +38,12 @@ public interface AiSessionService extends IService<AiSession> {
      */
     boolean updateAnswer(UpdateAnswerRequest request);
 
+    /**
+     * 为指定会话生成并保存执行后摘要
+     * @param sessionId 会话记录主键ID
+     */
+    void generateSummary(Long sessionId);
+
 
 
 

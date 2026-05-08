@@ -7,7 +7,13 @@ import cn.mc.agent.prompts.ReactAgentPrompts;
 import cn.mc.agent.service.AgentTaskManager;
 import cn.mc.agent.service.AiSessionService;
 import cn.mc.agent.service.EpisodicMemoryService;
+import cn.mc.agent.service.SemanticMemoryService;
+import cn.mc.agent.service.ProceduralMemoryService;
 import cn.mc.agent.entity.EpisodicEvent;
+import cn.mc.agent.entity.SemanticMemory;
+import cn.mc.agent.entity.ProceduralMemory;
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
 import com.alibaba.fastjson2.JSON;
 import lombok.Builder;
 import lombok.Getter;
@@ -48,6 +54,9 @@ public abstract class BaseAgent {
     protected AiSessionService sessionService;
     protected AgentTaskManager taskManager;
     protected EpisodicMemoryService episodicMemoryService;
+    protected SemanticMemoryService semanticMemoryService;
+    protected ProceduralMemoryService proceduralMemoryService;
+    protected String userId;
 
     // 是否启用推荐问题功能
     protected boolean enableRecommendations = true;
@@ -269,6 +278,73 @@ public abstract class BaseAgent {
             return sb.toString().trim();
         } catch (Exception e) {
             log.warn("加载事件记忆失败: sessionId={}", sessionId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 加载用户画像（语义记忆 + 程序记忆），拼接为 System Prompt 片段
+     * @return 用户画像文本，无画像时返回 null
+     */
+    protected String loadUserMemoryContext() {
+        if (userId == null || semanticMemoryService == null || proceduralMemoryService == null) {
+            return null;
+        }
+
+        try {
+            SemanticMemory semantic = semanticMemoryService.findByUserId(userId);
+            ProceduralMemory procedural = proceduralMemoryService.findByUserId(userId);
+
+            if (semantic == null && procedural == null) {
+                return null;
+            }
+
+            StringBuilder sb = new StringBuilder("## 用户画像\n");
+
+            if (semantic != null) {
+                if (semantic.getIndustry() != null) {
+                    sb.append("- 行业：").append(semantic.getIndustry()).append("\n");
+                }
+                if (semantic.getRole() != null) {
+                    sb.append("- 角色：").append(semantic.getRole()).append("\n");
+                }
+                if (semantic.getDomainExpertise() != null) {
+                    JSONObject domains = JSON.parseObject(semantic.getDomainExpertise());
+                    if (!domains.isEmpty()) {
+                        sb.append("- 领域水平：");
+                        domains.forEach((k, v) -> sb.append(k).append("-").append(v).append("，"));
+                        sb.setLength(sb.length() - 1); // 去掉最后一个逗号
+                        sb.append("\n");
+                    }
+                }
+                if (semantic.getReportPreference() != null) {
+                    sb.append("- 报告偏好：").append(semantic.getReportPreference()).append("\n");
+                }
+                if (semantic.getResearchPurpose() != null) {
+                    sb.append("- 研究目的：").append(semantic.getResearchPurpose()).append("\n");
+                }
+                if (semantic.getLanguage() != null) {
+                    sb.append("- 语言：").append(semantic.getLanguage()).append("\n");
+                }
+            }
+
+            if (procedural != null) {
+                if (procedural.getInteractionStyle() != null) {
+                    sb.append("- 交互风格：").append(procedural.getInteractionStyle()).append("\n");
+                }
+                if (procedural.getDetailTolerance() != null) {
+                    sb.append("- 细节容忍度：").append(procedural.getDetailTolerance()).append("\n");
+                }
+                if (procedural.getWorkflowPattern() != null) {
+                    sb.append("- 工作流偏好：").append(procedural.getWorkflowPattern()).append("\n");
+                }
+            }
+
+            String result = sb.toString().trim();
+            log.debug("加载用户画像: userId={}, 长度={}", userId, result.length());
+            return result;
+        } catch (Exception e) {
+            log.warn("加载用户画像失败: userId={}", userId, e);
             return null;
         }
     }

@@ -7,7 +7,7 @@ import cn.mc.agent.agent.pptx.PPTBuilderAgent;
 import cn.mc.agent.agent.webSearch.WebSearchReactAgent;
 import cn.mc.agent.service.AgentTaskManager;
 import cn.mc.agent.service.AiSessionService;
-import cn.mc.agent.service.EpisodicMemoryService;
+import cn.mc.agent.service.MemoryExtractionService;
 import cn.mc.agent.tool.FileContentService;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
@@ -60,7 +60,7 @@ public class AgentController implements InitializingBean {
     private AgentTaskManager taskManager;
 
     @Autowired
-    private EpisodicMemoryService episodicMemoryService;
+    private MemoryExtractionService memoryExtractionService;
 
     @Value("${tavily.api-key}")
     private String tavilyApiKey;
@@ -144,8 +144,9 @@ public class AgentController implements InitializingBean {
     @GetMapping(value = "/deep/stream", produces = "text/event-stream;charset=UTF-8")
     @Operation(summary = "深度研究", description = "接收用户查询并返回流式响应，使用计划-执行模式进行深度研究")
     public Flux<String> deepStream(@RequestParam(required = true) String query,
-                                   @RequestParam(required = true) String conversationId) {
-        log.info("收到深度研究请求: query={}, conversationId={}", query, conversationId);
+                                   @RequestParam(required = true) String conversationId,
+                                   @RequestParam(required = false) String userId) {
+        log.info("收到深度研究请求: query={}, conversationId={}, userId={}", query, conversationId, userId);
 
         if (query == null || query.trim().isEmpty()) {
             log.warn("查询参数为空或无效");
@@ -154,6 +155,7 @@ public class AgentController implements InitializingBean {
 
         try {
             PlanExecuteAgent planExecuteAgent = initPlanExecuteAgent();
+            planExecuteAgent.setUserId(userId);
             // 使用持久化记忆加载历史记录
             ChatMemory persistentMemory = planExecuteAgent.createPersistentChatMemory(conversationId, 30);
             planExecuteAgent.setChatMemory(persistentMemory);
@@ -273,7 +275,7 @@ public class AgentController implements InitializingBean {
                 .tools(webSearchToolCallbacks)
                 .sessionService(sessionService)
                 .taskManager(taskManager)
-                .episodicMemoryService(episodicMemoryService)
+                .memoryExtractionService(memoryExtractionService)
                 .maxRounds(3)
                 .build();
     }

@@ -305,6 +305,59 @@ public final class PlanExecutePrompts {
             ]
             """;
 
+    public static final String MEMORY_EXTRACTION = """
+            你是【记忆提取器】。
+
+            你的任务：从一段研究对话中提取三类记忆信息。
+            输出严格 JSON，不要任何额外文本。
+
+            ## 一、事件记忆（episodic）
+            从研究报告中提取 5-8 条结构化事件。
+            事件类型：TOPIC（研究主题）/ FINDING（关键发现）/ DIMENSION（研究维度）/ FAILURE（未解决问题）
+            每条 ≤50字，附 1-3 个检索关键词。
+
+            ## 二、语义记忆（semantic）
+            从用户的问题和对话中推断用户的稳定特征。只提取有明确证据的特征，不确定的不要输出。
+            category 取值：
+            - domain_expertise — 领域知识水平，value 为对象 {"领域名":"BEGINNER/INTERMEDIATE/EXPERT"}
+            - industry — 所在行业，value 为字符串
+            - role — 职业角色，value 为字符串
+            - research_purpose — 研究目的（academic/business/personal），value 为字符串
+            - report_preference — 报告偏好（DETAILED/CONCISE/DATA_DRIVEN），value 为字符串
+            - language — 语言偏好（zh/en），value 为字符串
+
+            ## 三、程序记忆（procedural）
+            从用户的交互行为中推断工作模式。只提取有明确信号的模式。
+            category 取值：
+            - interaction_style — 交互风格（DEEP_DIVE/ONE_SHOT），value 为字符串
+            - detail_tolerance — 细节容忍度（HIGH/LOW），value 为字符串
+            - workflow_pattern — 工作流偏好（brainstorm_first/direct_report），value 为字符串
+
+            ## 输出格式（严格 JSON，不要任何额外文本）
+            {
+              "episodic": [
+                {"type":"TOPIC","content":"研究了什么","topic":"关键词1,关键词2"},
+                {"type":"FINDING","content":"关键发现","topic":"关键词"},
+                {"type":"DIMENSION","content":"覆盖的研究维度","topic":"关键词"},
+                {"type":"FAILURE","content":"未解决的问题","topic":"关键词"}
+              ],
+              "semantic": [
+                {"category":"domain_expertise","value":{"新能源汽车":"EXPERT"},"confidence":80},
+                {"category":"industry","value":"互联网","confidence":60},
+                {"category":"role","value":"产品经理","confidence":70}
+              ],
+              "procedural": [
+                {"category":"interaction_style","value":"DEEP_DIVE","confidence":70},
+                {"category":"detail_tolerance","value":"HIGH","confidence":60}
+              ]
+            }
+
+            ## 约束
+            - semantic 和 procedural 每类最多 5 条
+            - confidence 根据证据强度赋值：明确信号 80+，推断 50-70，猜测 <50
+            - 没有证据的字段不要输出，宁缺毋滥
+            """;
+
     public static final String SUMMARIZE = """
             你是【DeepResearch 结果总结专家】。
 

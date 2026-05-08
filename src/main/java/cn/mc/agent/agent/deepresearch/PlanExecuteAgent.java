@@ -13,7 +13,7 @@ import cn.mc.agent.entity.response.SimpleReactResult;
 import cn.mc.agent.prompts.PlanExecutePrompts;
 import cn.mc.agent.service.AgentTaskManager;
 import cn.mc.agent.service.AiSessionService;
-import cn.mc.agent.service.EpisodicMemoryService;
+import cn.mc.agent.service.MemoryExtractionService;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -69,8 +69,8 @@ public class PlanExecuteAgent extends BaseAgent {
     // 存储所有搜索结果，用于保存到数据库和发送给前端
     private List<SearchResult> allReferences;
 
-    // 事件记忆服务
-    private EpisodicMemoryService episodicMemoryService;
+    // 统一记忆提取服务
+    private MemoryExtractionService memoryExtractionService;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -82,7 +82,7 @@ public class PlanExecuteAgent extends BaseAgent {
                             ChatMemory chatMemory,
                             AiSessionService sessionService,
                             AgentTaskManager taskManager,
-                            EpisodicMemoryService episodicMemoryService) {
+                            MemoryExtractionService memoryExtractionService) {
         super(chatModel, "PlanExecuteAgent", "plan-execute");
         this.chatClient = ChatClient.builder(chatModel).build();
         this.tools = tools;
@@ -93,7 +93,7 @@ public class PlanExecuteAgent extends BaseAgent {
         this.chatMemory = chatMemory;
         this.sessionService = sessionService;
         this.taskManager = taskManager;
-        this.episodicMemoryService = episodicMemoryService;
+        this.memoryExtractionService = memoryExtractionService;
 
         // 初始化工具记录集合
         this.usedTools = new HashSet<>();
@@ -122,7 +122,7 @@ public class PlanExecuteAgent extends BaseAgent {
 
         private AgentTaskManager taskManager;
 
-        private EpisodicMemoryService episodicMemoryService;
+        private MemoryExtractionService memoryExtractionService;
 
         public Builder sessionService(AiSessionService sessionService) {
             this.sessionService = sessionService;
@@ -134,8 +134,8 @@ public class PlanExecuteAgent extends BaseAgent {
             return this;
         }
 
-        public Builder episodicMemoryService(EpisodicMemoryService episodicMemoryService) {
-            this.episodicMemoryService = episodicMemoryService;
+        public Builder memoryExtractionService(MemoryExtractionService memoryExtractionService) {
+            this.memoryExtractionService = memoryExtractionService;
             return this;
         }
 
@@ -176,7 +176,7 @@ public class PlanExecuteAgent extends BaseAgent {
 
         public PlanExecuteAgent build() {
             Objects.requireNonNull(chatModel, "chatModel must not be null");
-            return new PlanExecuteAgent(chatModel, tools, maxRounds, contextCharLimit, maxToolRetries, chatMemory, sessionService, taskManager, episodicMemoryService);
+            return new PlanExecuteAgent(chatModel, tools, maxRounds, contextCharLimit, maxToolRetries, chatMemory, sessionService, taskManager, memoryExtractionService);
         }
     }
 
@@ -551,15 +551,15 @@ public class PlanExecuteAgent extends BaseAgent {
             sessionService.updateAnswer(request);
             log.info("结果已保存到会话: sessionId={}, conversationId={}", currentSessionId, conversationId);
 
-            // 异步生成事件记忆（不阻塞响应流）
+            // 异步统一记忆提取（不阻塞响应流）
             final Long sessionId = currentSessionId;
             Schedulers.boundedElastic().schedule(() -> {
                 try {
-                    if (episodicMemoryService != null) {
-                        episodicMemoryService.generateEvents(sessionId);
+                    if (memoryExtractionService != null) {
+                        memoryExtractionService.extractAll(sessionId);
                     }
                 } catch (Exception e) {
-                    log.error("异步事件记忆生成失败: sessionId={}", sessionId, e);
+                    log.error("异步记忆提取失败: sessionId={}", sessionId, e);
                 }
             });
         } catch (Exception e) {
@@ -1138,24 +1138,30 @@ public class PlanExecuteAgent extends BaseAgent {
         // 提取工具执行结果，排除中间过程
         String toolResults = state.extractToolResults();
 
-        Prompt prompt = new Prompt(List.of(
-                new SystemMessage(PlanExecutePrompts.getCurrentTime()),
-                new SystemMessage(PlanExecutePrompts.SUMMARIZE),
-                new UserMessage("""
-                                        【用户原始问题】
-                                        %s
+        // 构建 prompt，注入用户画像
+        List<Message> promptMessages = new ArrayList<>();
+        promptMessages.add(new SystemMessage(PlanExecutePrompts.getCurrentTime()));
+        promptMessages.add(new SystemMessage(PlanExecutePrompts.SUMMARIZE));
+        String userMemoryContext = loadUserMemoryContext();
+        if (userMemoryContext != null) {
+            promptMessages.add(new SystemMessage(userMemoryContext));
+        }
+        promptMessages.add(new UserMessage("""
+                【用户原始问题】
+                %s
 
-                                        【研究主题】
-                                        %s
+                【研究主题】
+                %s
 
-                                        【工具检索结果】
-                                        %s
-                        """.formatted(
-                        state.getQuestion(),
-                        state.getRefinedResearchTopic() != null ? state.getRefinedResearchTopic() : "未生成研究主题",
-                        toolResults.isEmpty() ? "（未检索到相关结果）" : toolResults
-                ))
-        ));
+                【工具检索结果】
+                %s
+                """.formatted(
+                state.getQuestion(),
+                state.getRefinedResearchTopic() != null ? state.getRefinedResearchTopic() : "未生成研究主题",
+                toolResults.isEmpty() ? "（未检索到相关结果）" : toolResults
+        )));
+
+        Prompt prompt = new Prompt(promptMessages);
 
         Disposable disposable = chatClient.prompt()
                 .messages(prompt.getInstructions())

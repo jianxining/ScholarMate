@@ -1,10 +1,11 @@
 package cn.mc.agent.service;
 
 import cn.mc.agent.entity.EpisodicEvent;
+import com.baomidou.mybatisplus.extension.service.IService;
 
 import java.util.List;
 
-public interface EpisodicMemoryService {
+public interface EpisodicMemoryService extends IService<EpisodicEvent> {
 
     /**
      * 从 ai_session 的 question+answer 中提取结构化事件，写入 episodic_memory

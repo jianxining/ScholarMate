@@ -79,7 +79,7 @@ public class MemoryExtractionServiceImpl implements MemoryExtractionService {
             saveEpisodicEvents(session, result.getJSONArray("episodic"));
 
             // 2. 写入语义记忆
-            String userId = session.getSessionId(); // 暂用 sessionId 作为 userId
+            String userId = session.getSessionId(); // TODO：暂用 sessionId 作为 userId
             List<JSONObject> semanticUpdates = result.getJSONArray("semantic") != null
                     ? result.getJSONArray("semantic").toJavaList(JSONObject.class) : List.of();
             semanticMemoryService.updateMemory(userId, semanticUpdates);

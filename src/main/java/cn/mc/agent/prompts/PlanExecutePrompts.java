@@ -51,8 +51,8 @@ public final class PlanExecutePrompts {
 
             3. 研究型任务的规划要求
                - 优先覆盖事实性、背景性、争议性信息
-               - 如存在多个独立信息源，优先并行检索
-               - 如后续步骤依赖前序结果，明确 order 依赖关系
+               - 如存在多个独立信息源，优先并行检索（blockedBy 为空）
+               - 如后续步骤依赖前序结果，通过 blockedBy 声明依赖关系
 
             4. 如果你判断当前研究信息已经充分
                - 返回一个 task，且 id = null
@@ -61,27 +61,34 @@ public final class PlanExecutePrompts {
             5. 输出必须是【严格 JSON 数组】
                - 不允许任何额外解释文本
 
+            ## blockedBy 字段说明
+            - blockedBy 是字符串数组，列出当前任务依赖的前置任务 id
+            - 无依赖的任务 blockedBy 为空数组 []
+            - 有依赖的任务必须等所有 blockedBy 中的任务完成后才能执行
+            - blockedBy 中引用的 id 必须存在于同一个计划中
+            - 严禁出现循环依赖（A 依赖 B，B 又依赖 A）
+
             ## 输出格式（严格 JSON）
             示例1：无需工具执行计划
             [
               {
                 "id": null,
                 "instruction": "无需调用任何工具",
-                "order": 0
+                "blockedBy": []
               }
             ]
 
-            示例2：需要工具执行计划（并行）
+            示例2：需要工具执行计划（全部并行）
             [
               {
                 "id": "task-1",
                 "instruction": "调用 <工具名> 工具，执行 <明确查询或操作>",
-                "order": 1
+                "blockedBy": []
               },
               {
                 "id": "task-2",
                 "instruction": "调用 <工具名> 工具，执行 <明确查询或操作>",
-                "order": 1
+                "blockedBy": []
               }
             ]
 
@@ -90,21 +97,32 @@ public final class PlanExecutePrompts {
               {
                 "id": "task-1",
                 "instruction": "调用 <工具名> 工具，执行 <明确查询或操作>，获取XX结果",
-                "order": 1
+                "blockedBy": []
               },
               {
                 "id": "task-2",
                 "instruction": "根据task-1的执行结果，调用 <工具名> 工具，执行 <明确查询或操作>",
-                "order": 2
+                "blockedBy": ["task-1"]
               }
             ]
 
-            示例4：具有先后关系的执行计划（并行+串行）
+            示例4：并行+串行混合（DAG）
             [
-               {"id":"task-1","instruction":"调用 XXX 工具，执行<明确查询或操作>","order":1},
-               {"id":"task-2","instruction":"调用 XXX 工具，执行<明确查询或操作>","order":1},
-               {"id":"task-3","instruction":"根据 task1 和 task-2 的结果，调用 XXX 工具，执行<明确查询或操作>","order":2}
-             ]
+              {"id": "task-1", "instruction": "调用 XXX 工具，执行<明确查询或操作>", "blockedBy": []},
+              {"id": "task-2", "instruction": "调用 XXX 工具，执行<明确查询或操作>", "blockedBy": []},
+              {"id": "task-3", "instruction": "根据 task-1 的结果，调用 XXX 工具，执行<明确查询或操作>", "blockedBy": ["task-1"]},
+              {"id": "task-4", "instruction": "根据 task-1 和 task-2 的结果，调用 XXX 工具，执行<明确查询或操作>", "blockedBy": ["task-1", "task-2"]}
+            ]
+
+            示例5：扇出-扇入模式（复杂DAG）
+            [
+              {"id": "task-1", "instruction": "搜索XXX基础信息", "blockedBy": []},
+              {"id": "task-2", "instruction": "搜索XXX行业数据", "blockedBy": []},
+              {"id": "task-3", "instruction": "搜索XXX竞品分析", "blockedBy": []},
+              {"id": "task-4", "instruction": "根据task-1和task-2的结果，分析市场趋势", "blockedBy": ["task-1", "task-2"]},
+              {"id": "task-5", "instruction": "根据task-1和task-3的结果，分析竞争格局", "blockedBy": ["task-1", "task-3"]},
+              {"id": "task-6", "instruction": "根据task-4和task-5的结果，综合分析", "blockedBy": ["task-4", "task-5"]}
+            ]
             """;
 
     public static final String EXECUTE = """

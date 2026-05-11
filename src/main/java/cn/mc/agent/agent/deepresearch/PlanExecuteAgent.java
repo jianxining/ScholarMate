@@ -7,6 +7,7 @@ import cn.mc.agent.entity.record.CritiqueResult;
 import cn.mc.agent.entity.record.PlanTask;
 import cn.mc.agent.entity.record.SearchResult;
 import cn.mc.agent.entity.record.TaskResult;
+import cn.mc.agent.entity.record.TaskStatus;
 import cn.mc.agent.entity.request.SaveQuestionRequest;
 import cn.mc.agent.entity.request.UpdateAnswerRequest;
 import cn.mc.agent.entity.response.SimpleReactResult;
@@ -629,12 +630,25 @@ public class PlanExecuteAgent extends BaseAgent {
                     // 输出轮次分隔线
                     emit(sink, finished, "\n🔄 第 " + state.getRound() + " 轮研究开始\n", "thinking", thinkingBuffer);
 
-                    List<PlanTask> plan = generatePlan(state, sink, finished, thinkingBuffer);
-                    if (finished.get() || compositeDisposable.isDisposed()) {
-                        return;
-                    }
+                    // 生成计划，检测环则自动重试
+                    List<PlanTask> plan = null;
+                    for (int retry = 0; retry < 3; retry++) {
+                        plan = generatePlan(state, sink, finished, thinkingBuffer);
+                        if (finished.get() || compositeDisposable.isDisposed()) return;
+                        if (plan.isEmpty() || plan.stream().allMatch(t -> t.id() == null)) break;
 
-                    if (plan.isEmpty() || plan.stream().allMatch(t -> t.id() == null)) {
+                        String cycleInfo = detectCycleDetail(plan);
+                        if (cycleInfo == null) break;
+
+                        emit(sink, finished, "\n⚠️ 检测到循环依赖，重新规划（第" + (retry + 1) + "次）...\n",
+                                "thinking", thinkingBuffer);
+                        state.add(new AssistantMessage("""
+                                【Plan Error】
+                                计划中存在循环依赖：%s
+                                请重新生成计划，确保 blockedBy 不形成环。
+                                """.formatted(cycleInfo)));
+                    }
+                    if (plan == null || plan.isEmpty() || plan.stream().allMatch(t -> t.id() == null)) {
                         break;
                     }
 
@@ -756,119 +770,107 @@ public class PlanExecuteAgent extends BaseAgent {
 
         Map<String, TaskResult> results = new ConcurrentHashMap<>();
 
-        // 按 order 分组：order 相同的 task 可并行
-        Map<Integer, List<PlanTask>> grouped = plan.stream().collect(Collectors.groupingBy(PlanTask::order));
+        // 1. 构建 DAG：用 mutable DagTask 包装每个 PlanTask
+        Map<String, DagTask> dag = new LinkedHashMap<>();
+        for (PlanTask task : plan) {
+            if (task.id() == null || task.id().isEmpty()) continue;
+            dag.put(task.id(), new DagTask(task));
+        }
 
         Map<String, String> accumulatedResults = new ConcurrentHashMap<>();
 
-        // 按 order 顺序执行（不同 order 串行）
-        for (Integer order : new TreeSet<>(grouped.keySet())) {
-            if (hasSentFinal.get() || compositeDisposable.isDisposed()) {
+        // 2. DAG 调度主循环
+        while (!dag.isEmpty()) {
+            if (hasSentFinal.get() || compositeDisposable.isDisposed()) break;
+
+            // 2a. 发现所有就绪任务
+            List<DagTask> readyTasks = dag.values().stream()
+                    .filter(DagTask::isReady)
+                    .toList();
+
+            if (readyTasks.isEmpty()) {
+                log.warn("DAG 死锁：剩余 {} 个任务无法执行", dag.size());
+                for (DagTask dt : dag.values()) {
+                    results.put(dt.task().id(),
+                            new TaskResult(dt.task().id(), false, null, "因上游任务失败而跳过"));
+                }
                 break;
             }
 
-            // 构建任务执行的依赖上下文（只传递上一个 order 的结果）
-            String dependencyContext = buildDependencyContext(accumulatedResults, plan, order);
+            // 2b. 标记为 IN_PROGRESS
+            readyTasks.forEach(dt -> dt.setStatus(TaskStatus.IN_PROGRESS));
 
-            List<PlanTask> tasks = grouped.get(order);
+            // 2c. 并行执行就绪任务
+            CountDownLatch latch = new CountDownLatch(readyTasks.size());
 
-            // 使用CountDownLatch等待当前order组全部完成
-            CountDownLatch latch = new CountDownLatch(tasks.size());
+            for (DagTask dagTask : readyTasks) {
+                String dependencyContext = buildDependencyContext(accumulatedResults, dag, dagTask.task());
 
-            for (PlanTask task : tasks) {
-                // 使用Mono包装任务执行
                 Disposable taskDisposable = Mono.fromRunnable(() -> {
-                            boolean acquired = false;
-                            try {
-                                // 检查是否已被停止
-                                if (compositeDisposable.isDisposed()) {
-                                    return;
-                                }
+                    boolean acquired = false;
+                    try {
+                        if (compositeDisposable.isDisposed()) return;
 
-                                // 获取执行许可
-                                toolSemaphore.acquire();
-                                acquired = true;
+                        toolSemaphore.acquire();
+                        acquired = true;
 
-                                if (task == null || task.id() == null || task.id().isEmpty()) {
-                                    return;
-                                }
+                        if (compositeDisposable.isDisposed()) return;
 
-                                // 再次检查，避免在acquire后被停止
-                                if (compositeDisposable.isDisposed()) {
-                                    return;
-                                }
+                        TaskResult result = executeWithRetry(dagTask.task(), dependencyContext, sink, hasSentFinal, thinkingBuffer);
+                        results.put(dagTask.task().id(), result);
 
-                                TaskResult result = executeWithRetry(task, dependencyContext, sink, hasSentFinal, thinkingBuffer);
-                                results.put(task.id(), result);
+                        if (result.success() && result.output() != null) {
+                            accumulatedResults.put(dagTask.task().id(), result.output());
+                            dagTask.setStatus(TaskStatus.COMPLETED);
+                        } else {
+                            dagTask.setStatus(TaskStatus.FAILED);
+                        }
 
-                                if (result.success() && result.output() != null) {
-                                    accumulatedResults.put(task.id(), result.output());
-                                }
+                        // 构建任务结果消息
+                        StringBuilder resultMessage = new StringBuilder();
+                        resultMessage.append("【Completed Task Result】\n");
+                        resultMessage.append("taskId: ").append(dagTask.task().id()).append("\n");
+                        resultMessage.append("success: ").append(result.success()).append("\n");
+                        if (result.output() != null) {
+                            resultMessage.append("result:\n").append(result.output()).append("\n");
+                        }
+                        if (result.error() != null) {
+                            resultMessage.append("error:\n").append(result.error()).append("\n");
+                        }
+                        resultMessage.append("【End Task Result】");
 
-                                // 构建任务结果消息，只在有错误时才显示 error
-                                StringBuilder resultMessage = new StringBuilder();
-                                resultMessage.append("【Completed Task Result】\n");
-                                resultMessage.append("taskId: ").append(task.id()).append("\n");
-                                resultMessage.append("success: ").append(result.success()).append("\n");
-                                if (result.output() != null) {
-                                    resultMessage.append("result:\n").append(result.output()).append("\n");
-                                }
-                                if (result.error() != null) {
-                                    resultMessage.append("error:\n").append(result.error()).append("\n");
-                                }
-                                resultMessage.append("【End Task Result】");
+                        state.add(new AssistantMessage(resultMessage.toString()));
 
-                                state.add(new AssistantMessage(resultMessage.toString()));
+                    } catch (InterruptedException e) {
+                        log.info("Task {} 执行被中断", dagTask.task().id());
+                        Thread.currentThread().interrupt();
+                        dagTask.setStatus(TaskStatus.FAILED);
+                        results.put(dagTask.task().id(),
+                                new TaskResult(dagTask.task().id(), false, null, "Task execution interrupted"));
+                    } catch (Exception e) {
+                        dagTask.setStatus(TaskStatus.FAILED);
+                        if (compositeDisposable.isDisposed() || Thread.currentThread().isInterrupted()
+                                || (e.getMessage() != null && e.getMessage().contains("interrupted"))) {
+                            log.info("Task {} 执行被用户停止: {}", dagTask.task().id(), e.getMessage());
+                            results.put(dagTask.task().id(),
+                                    new TaskResult(dagTask.task().id(), false, null, "Task execution interrupted by user"));
+                        } else {
+                            log.error("Task execution error", e);
+                            results.put(dagTask.task().id(),
+                                    new TaskResult(dagTask.task().id(), false, null, "Task execution error: " + e.getMessage()));
+                        }
+                    } finally {
+                        if (acquired) toolSemaphore.release();
+                        latch.countDown();
+                    }
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .subscribe();
 
-                            } catch (InterruptedException e) {
-                                log.info("Task {} 执行被中断", task.id());
-                                Thread.currentThread().interrupt();
-
-                                results.put(task.id(),
-                                        new TaskResult(
-                                                task.id(),
-                                                false,
-                                                null,
-                                                "Task execution interrupted"
-                                        ));
-                            } catch (Exception e) {
-                                // 检查是否是中断导致的异常
-                                if (compositeDisposable.isDisposed() || Thread.currentThread().isInterrupted()
-                                        || (e.getMessage() != null && e.getMessage().contains("interrupted"))) {
-                                    log.info("Task {} 执行被用户停止: {}", task.id(), e.getMessage());
-                                    results.put(task.id(),
-                                            new TaskResult(
-                                                    task.id(),
-                                                    false,
-                                                    null,
-                                                    "Task execution interrupted by user"
-                                            ));
-                                } else {
-                                    log.error("Task execution error", e);
-                                    results.put(task.id(),
-                                            new TaskResult(
-                                                    task.id(),
-                                                    false,
-                                                    null,
-                                                    "Task execution error: " + e.getMessage()
-                                            ));
-                                }
-                            } finally {
-                                // 释放许可
-                                if (acquired) {
-                                    toolSemaphore.release();
-                                }
-                                latch.countDown();
-                            }
-                        })
-                        .subscribeOn(Schedulers.boundedElastic())
-                        .subscribe();
-
-                // 将任务的disposable添加到composite
                 compositeDisposable.add(taskDisposable);
             }
 
-            // 等待当前order组全部完成
+            // 2d. 等待本轮所有就绪任务完成
             try {
                 latch.await();
             } catch (InterruptedException e) {
@@ -876,6 +878,39 @@ public class PlanExecuteAgent extends BaseAgent {
                 log.warn("executePlan interrupted");
                 break;
             }
+
+            // 2e. 收集已终结的任务 ID
+            Set<String> terminatedIds = dag.values().stream()
+                    .filter(dt -> dt.status() == TaskStatus.COMPLETED || dt.status() == TaskStatus.FAILED)
+                    .map(dt -> dt.task().id())
+                    .collect(Collectors.toSet());
+
+            // 2f. 级联跳过：blockedBy 含 FAILED 任务的 PENDING 任务标记 SKIPPED
+            for (DagTask dt : dag.values()) {
+                if (dt.status() == TaskStatus.PENDING && dt.task().blockedBy() != null) {
+                    boolean hasFailedUpstream = dt.task().blockedBy().stream()
+                            .anyMatch(depId -> {
+                                DagTask dep = dag.get(depId);
+                                return dep != null && dep.status() == TaskStatus.FAILED;
+                            });
+                    if (hasFailedUpstream) {
+                        dt.setStatus(TaskStatus.SKIPPED);
+                        terminatedIds.add(dt.task().id());
+                        results.put(dt.task().id(),
+                                new TaskResult(dt.task().id(), false, null, "上游任务失败，跳过执行"));
+                    }
+                }
+            }
+
+            // 2g. 从下游 blockedBy 中移除已终结的任务
+            for (DagTask dt : dag.values()) {
+                if (dt.status() == TaskStatus.PENDING) {
+                    dt.removeBlockedBy(terminatedIds);
+                }
+            }
+
+            // 2h. 从 DAG 中移除已终结任务
+            terminatedIds.forEach(dag::remove);
         }
 
         return results;
@@ -962,41 +997,30 @@ public class PlanExecuteAgent extends BaseAgent {
 
     /**
      * 构建任务执行的依赖上下文
-     * 规则：同 order 的任务不传依赖（并行），不同 order 的任务只传递上一个 order 的结果
+     * 基于 blockedBy 字段，只传递当前任务直接依赖的前置任务结果
      * 注意：此方法只返回【Available Results】部分，【Current Task】由 executeWithRetry 拼接
      *
-     * @param results      所有已完成任务的结果
-     * @param plan         当前轮次的执行计划（用于获取任务 order）
-     * @param currentOrder 当前任务的 order
+     * @param results 所有已完成任务的结果
+     * @param dag     当前 DAG（用于查找依赖任务的指令）
+     * @param task    当前要执行的任务
      * @return 依赖上下文字符串
      */
-    private String buildDependencyContext(Map<String, String> results, List<PlanTask> plan, int currentOrder) {
+    private String buildDependencyContext(Map<String, String> results, Map<String, DagTask> dag, PlanTask task) {
         StringBuilder context = new StringBuilder();
 
-        // 1. 第一个 order 的任务没有依赖
-        if (currentOrder == 1) {
+        List<String> blockedBy = task.blockedBy();
+        if (blockedBy == null || blockedBy.isEmpty()) {
             return context.append("无\n").toString();
         }
 
-        // 2. 收集上一个 order 的任务结果
         boolean hasDependencies = false;
-
-        for (Map.Entry<String, String> entry : results.entrySet()) {
-            // 查找任务对应的 order
-            PlanTask task = plan.stream()
-                    .filter(t -> t.id() != null && t.id().equals(entry.getKey()))
-                    .findFirst()
-                    .orElse(null);
-
-            if (task != null && task.order() == currentOrder - 1) {
-                // 只有上一个 order 的结果才是依赖
-                if (!hasDependencies) {
-                    context.append("任务 ");
-                    hasDependencies = true;
-                }
-                context.append(String.format("%s: %s\n\n",
-                        entry.getKey(),
-                        entry.getValue()));
+        for (String depId : blockedBy) {
+            String result = results.get(depId);
+            if (result != null) {
+                if (!hasDependencies) hasDependencies = true;
+                DagTask depTask = dag.get(depId);
+                String depInstruction = depTask != null ? depTask.task().instruction() : "";
+                context.append(String.format("任务 %s (%s): %s\n\n", depId, depInstruction, result));
             }
         }
 
@@ -1218,5 +1242,77 @@ public class PlanExecuteAgent extends BaseAgent {
                     .append("\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * DAG 调度器使用的 mutable 包装器
+     */
+    private static class DagTask {
+        private final PlanTask task;
+        private volatile TaskStatus status;
+        private final List<String> blockedBy;
+
+        DagTask(PlanTask task) {
+            this.task = task;
+            this.status = TaskStatus.PENDING;
+            this.blockedBy = new ArrayList<>(
+                    task.blockedBy() != null ? task.blockedBy() : List.of());
+        }
+
+        PlanTask task() { return task; }
+        TaskStatus status() { return status; }
+        void setStatus(TaskStatus s) { this.status = s; }
+
+        boolean isReady() {
+            return status == TaskStatus.PENDING && blockedBy.isEmpty();
+        }
+
+        void removeBlockedBy(Set<String> ids) {
+            blockedBy.removeAll(ids);
+        }
+    }
+
+    /**
+     * 检测任务依赖环，返回环中节点描述（无环返回 null）
+     * Kahn 算法：拓扑排序后，未处理的节点即为环中节点
+     */
+    private String detectCycleDetail(List<PlanTask> plan) {
+        Map<String, Integer> inDegree = new HashMap<>();
+        Map<String, List<String>> graph = new HashMap<>();
+
+        for (PlanTask t : plan) {
+            if (t.id() == null) continue;
+            inDegree.putIfAbsent(t.id(), 0);
+            graph.putIfAbsent(t.id(), new ArrayList<>());
+            if (t.blockedBy() != null) {
+                for (String dep : t.blockedBy()) {
+                    inDegree.merge(t.id(), 1, Integer::sum);
+                    graph.computeIfAbsent(dep, k -> new ArrayList<>()).add(t.id());
+                }
+            }
+        }
+
+        Queue<String> queue = new LinkedList<>();
+        for (var e : inDegree.entrySet()) {
+            if (e.getValue() == 0) queue.add(e.getKey());
+        }
+
+        int processed = 0;
+        while (!queue.isEmpty()) {
+            String id = queue.poll();
+            processed++;
+            for (String next : graph.getOrDefault(id, List.of())) {
+                if (inDegree.merge(next, -1, Integer::sum) == 0) {
+                    queue.add(next);
+                }
+            }
+        }
+
+        if (processed == inDegree.size()) return null;
+
+        Set<String> cycleNodes = inDegree.keySet().stream()
+                .filter(id -> inDegree.get(id) > 0)
+                .collect(Collectors.toSet());
+        return String.join(" ↔ ", cycleNodes);
     }
 }

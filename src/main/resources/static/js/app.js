@@ -1,4 +1,4 @@
-const { createApp, ref, computed, nextTick, onMounted, watch } = Vue;
+const { createApp, ref, reactive, computed, nextTick, onMounted, watch } = Vue;
 
 createApp({
     setup() {
@@ -17,15 +17,16 @@ createApp({
         const uploadedFileId = ref(null);
         const isUploading = ref(false);
         const isDragOver = ref(false);
-        const sendingMap = ref({}); // { [conversationId]: true/false }
+        const sendingMap = reactive(new Map()); // Map<conversationId, boolean>
+        const streamingChatId = ref(null); // 当前正在流式输出的 conversationId
         const currentRecommendMsgId = ref(null);
         const researchDepth = ref('concise');
 
         const setSending = (chatId, val) => {
-            sendingMap.value[chatId] = val;
+            sendingMap.set(chatId, val);
         };
         const isSending = computed(() => {
-            return sendingMap.value[currentChatId.value] || false;
+            return sendingMap.get(currentChatId.value) || false;
         });
 
         // 确认对话框状态
@@ -260,6 +261,7 @@ createApp({
             const chatId = currentChatId.value;
             currentRecommendMsgId.value = null;
             setSending(chatId, true);
+            streamingChatId.value = chatId;
 
             inputMessage.value = '';
             const fileToSend = selectedFile.value;
@@ -328,7 +330,7 @@ createApp({
             const apiUrl = APP_API.getStreamChatUrl(backendUrl.value, selectedAgent.value, hasFile && fileIdToSend);
             const url = new URL(apiUrl);
             url.searchParams.append('query', message || (hasFile ? '请分析这个文件' : ''));
-            url.searchParams.append('conversationId', currentChatId.value);
+            url.searchParams.append('conversationId', chatId);
             if (hasFile && fileIdToSend) {
                 url.searchParams.append('fileId', fileIdToSend);
             }
@@ -374,6 +376,7 @@ createApp({
 
                             if (dataStr.trim() === STREAM_TYPES.DONE) {
                                 setSending(chatId, false);
+                                streamingChatId.value = null;
                                 abortController = null;
                                 currentStreamContentDiv = null;
                                 currentThinkingContentDiv = null;
@@ -400,6 +403,7 @@ createApp({
 
                             if (cleanLine === STREAM_TYPES.DONE) {
                                 setSending(chatId, false);
+                                streamingChatId.value = null;
                                 abortController = null;
                                 currentStreamContentDiv = null;
                                 currentThinkingContentDiv = null;
@@ -425,6 +429,7 @@ createApp({
 
                     if (cleanBuffer === STREAM_TYPES.DONE) {
                         setSending(chatId, false);
+                        streamingChatId.value = null;
                         currentStreamContentDiv = null;
                         currentThinkingContentDiv = null;
                         currentThinkingSectionDiv = null;
@@ -449,6 +454,7 @@ createApp({
                                 updateStreamContent(aiMsg.content);
                             } else if (data.type === STREAM_TYPES.COMPLETE) {
                                 setSending(chatId, false);
+                                streamingChatId.value = null;
                             }
                         } catch (e) {
                             console.warn('解析剩余数据失败:', cleanBuffer, e);
@@ -457,6 +463,7 @@ createApp({
                 }
 
                 setSending(chatId, false);
+                streamingChatId.value = null;
                 currentStreamContentDiv = null;
                 currentThinkingContentDiv = null;
                 currentThinkingSectionDiv = null;
@@ -469,6 +476,7 @@ createApp({
                     updateStreamContent(aiMsg.content);
                 }
                 setSending(chatId, false);
+                streamingChatId.value = null;
                 abortController = null;
                 currentStreamContentDiv = null;
                 currentThinkingContentDiv = null;
@@ -539,6 +547,7 @@ createApp({
                 }
             } else if (data.type === STREAM_TYPES.COMPLETE) {
                 setSending(chatId, false);
+                streamingChatId.value = null;
                 currentRecommendMsgId.value = aiMsg.id;
                 currentStreamContentDiv = null;
                 currentThinkingContentDiv = null;
@@ -548,16 +557,18 @@ createApp({
         };
 
         const stopMessage = async () => {
-            if (!isSending.value) return;
+            const targetChatId = streamingChatId.value;
+            if (!targetChatId) return;
 
             // if (abortController) {
             //     abortController.abort();
             //     abortController = null;
             // }
 
-            await APP_API.stopStream(backendUrl.value, currentChatId.value);
+            await APP_API.stopStream(backendUrl.value, targetChatId);
 
-            setSending(currentChatId.value, false);
+            setSending(targetChatId, false);
+            streamingChatId.value = null;
             currentStreamContentDiv = null;
             currentThinkingContentDiv = null;
             currentThinkingSectionDiv = null;
@@ -710,6 +721,7 @@ createApp({
             isUploading,
             isDragOver,
             isSending,
+            streamingChatId,
             currentRecommendMsgId,
             canSend,
             inputPlaceholder,

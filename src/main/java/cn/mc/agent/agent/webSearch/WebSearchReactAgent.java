@@ -237,6 +237,9 @@ public class WebSearchReactAgent extends BaseAgent {
             return;
         }
         Generation generation = chunk.getResult();
+        if (generation == null || generation.getOutput() == null) {
+            return;
+        }
         String text = generation.getOutput().getText();
         List<AssistantMessage.ToolCall> tc = generation.getOutput().getToolCalls();
         // 一旦发现 tool_call，立即进入 TOOL_CALL 模式
@@ -371,6 +374,9 @@ public class WebSearchReactAgent extends BaseAgent {
                 .doOnNext(chunk -> {
                     if (chunk != null) {
                         Generation generation = chunk.getResult();
+                        if (generation == null || generation.getOutput() == null) {
+                            return;
+                        }
                         String text = generation.getOutput().getText();
                         if (text != null) {
                             finalTextBuffer.append(text);

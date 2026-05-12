@@ -211,6 +211,9 @@ public class FileManageService {
                     .media(List.of(new Media(MimeTypeUtils.IMAGE_PNG, imageResource)))
                     .build();
             var response = multimodalChatModel.call(new Prompt(List.of(userMessage)));
+            if (response.getResult() == null || response.getResult().getOutput() == null) {
+                return "[无法识别图片内容]";
+            }
             String resp = response.getResult().getOutput().getText();
 
             if (resp == null || resp.trim().isEmpty()) {

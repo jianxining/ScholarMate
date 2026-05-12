@@ -135,8 +135,6 @@ const uploadFile = async (backendUrl, file) => {
 const getStreamChatUrl = (backendUrl, selectedAgent, hasFile) => {
     if (hasFile) {
         return `${backendUrl}/agent/file/stream`;
-    } else if (selectedAgent === 'ppt') {
-        return `${backendUrl}/agent/pptx/stream`;
     } else if (selectedAgent === 'deep') {
         return `${backendUrl}/agent/deep/stream`;
     }

@@ -44,7 +44,11 @@ public class SchemaStrategy implements PptStateStrategy {
         });
 
         Disposable disposable = Mono.fromCallable(() -> {
-                    String json = context.getChatModel().call(new Prompt(prompt)).getResult().getOutput().getText();
+                    var callResult = context.getChatModel().call(new Prompt(prompt)).getResult();
+                    if (callResult == null || callResult.getOutput() == null) {
+                        throw new IllegalStateException("模型返回为空");
+                    }
+                    String json = callResult.getOutput().getText();
                     PptSchema pptSchema = converter.convert(json);
                     String pptSchemaJson = JSON.toJSONString(pptSchema);
 
@@ -92,7 +96,11 @@ public class SchemaStrategy implements PptStateStrategy {
         });
 
         Disposable disposable = Mono.fromCallable(() -> {
-                    String json = context.getChatModel().call(new Prompt(modifyPrompt)).getResult().getOutput().getText();
+                    var callResult = context.getChatModel().call(new Prompt(modifyPrompt)).getResult();
+                    if (callResult == null || callResult.getOutput() == null) {
+                        throw new IllegalStateException("模型返回为空");
+                    }
+                    String json = callResult.getOutput().getText();
                     PptSchema pptSchema = converter.convert(json);
                     String pptSchemaJson = JSON.toJSONString(pptSchema);
 

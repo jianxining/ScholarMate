@@ -1138,10 +1138,11 @@ public class PlanExecuteAgent extends BaseAgent {
                 new UserMessage(state.renderFullContext())
         ));
 
-        String snapshot = chatModel.call(prompt)
-                .getResult()
-                .getOutput()
-                .getText();
+        var compressResult = chatModel.call(prompt).getResult();
+        if (compressResult == null || compressResult.getOutput() == null) {
+            throw new IllegalStateException("上下文压缩失败：模型返回为空");
+        }
+        String snapshot = compressResult.getOutput().getText();
 
         state.clearMessages();
         state.add(new SystemMessage("【Compressed Agent State】\n" + snapshot));

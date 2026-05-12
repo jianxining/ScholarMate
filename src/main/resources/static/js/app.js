@@ -17,8 +17,16 @@ createApp({
         const uploadedFileId = ref(null);
         const isUploading = ref(false);
         const isDragOver = ref(false);
-        const isSending = ref(false);
+        const sendingMap = ref({}); // { [conversationId]: true/false }
         const currentRecommendMsgId = ref(null);
+        const researchDepth = ref('concise');
+
+        const setSending = (chatId, val) => {
+            sendingMap.value[chatId] = val;
+        };
+        const isSending = computed(() => {
+            return sendingMap.value[currentChatId.value] || false;
+        });
 
         // 确认对话框状态
         const showConfirmDialog = ref(false);
@@ -187,6 +195,28 @@ createApp({
             event.target.value = '';
         };
 
+        const handleHomeFileSelect = async (event) => {
+            const files = event.target.files;
+            if (files.length > 0) {
+                selectedAgent.value = 'file';
+                await handleFile(files[0]);
+            }
+            event.target.value = '';
+        };
+
+        const handleChatFileSelect = async (event) => {
+            const files = event.target.files;
+            if (files.length > 0) {
+                if (selectedFile.value) {
+                    alert('已上传文件，请先删除当前文件再上传新文件（限1个）');
+                    return;
+                }
+                selectedAgent.value = 'file';
+                await handleFile(files[0]);
+            }
+            event.target.value = '';
+        };
+
         const handleFile = async (file) => {
             selectedFile.value = file;
             isUploading.value = true;
@@ -227,8 +257,9 @@ createApp({
             clearAllRecommendQuestions();
             const message = inputMessage.value.trim();
             const hasFile = !!selectedFile.value;
+            const chatId = currentChatId.value;
             currentRecommendMsgId.value = null;
-            isSending.value = true;
+            setSending(chatId, true);
 
             inputMessage.value = '';
             const fileToSend = selectedFile.value;
@@ -301,6 +332,7 @@ createApp({
             if (hasFile && fileIdToSend) {
                 url.searchParams.append('fileId', fileIdToSend);
             }
+            url.searchParams.append('depth', researchDepth.value);
 
             try {
                 abortController = new AbortController();
@@ -341,7 +373,7 @@ createApp({
                             let dataStr = line.slice(6);
 
                             if (dataStr.trim() === STREAM_TYPES.DONE) {
-                                isSending.value = false;
+                                setSending(chatId, false);
                                 abortController = null;
                                 currentStreamContentDiv = null;
                                 currentThinkingContentDiv = null;
@@ -359,7 +391,7 @@ createApp({
                                 }
 
                                 const data = JSON.parse(dataStr);
-                                processStreamData(data, aiMsg, thinkingContent);
+                                processStreamData(data, aiMsg, thinkingContent, chatId);
                             } catch (e) {
                                 console.warn('解析数据失败:', dataStr, e);
                             }
@@ -367,7 +399,7 @@ createApp({
                             let cleanLine = line.replace(/^data:\s*/, '').trim();
 
                             if (cleanLine === STREAM_TYPES.DONE) {
-                                isSending.value = false;
+                                setSending(chatId, false);
                                 abortController = null;
                                 currentStreamContentDiv = null;
                                 currentThinkingContentDiv = null;
@@ -379,7 +411,7 @@ createApp({
                             if (cleanLine && cleanLine.startsWith('{') && cleanLine.endsWith('}')) {
                                 try {
                                     const data = JSON.parse(cleanLine);
-                                    processStreamData(data, aiMsg, thinkingContent);
+                                    processStreamData(data, aiMsg, thinkingContent, chatId);
                                 } catch (e) {
                                     console.warn('解析JSON行失败:', cleanLine, e);
                                 }
@@ -392,7 +424,7 @@ createApp({
                     let cleanBuffer = buffer.replace(/^data:\s*/, '').trim();
 
                     if (cleanBuffer === STREAM_TYPES.DONE) {
-                        isSending.value = false;
+                        setSending(chatId, false);
                         currentStreamContentDiv = null;
                         currentThinkingContentDiv = null;
                         currentThinkingSectionDiv = null;
@@ -416,7 +448,7 @@ createApp({
                                 aiMsg.content += data.content;
                                 updateStreamContent(aiMsg.content);
                             } else if (data.type === STREAM_TYPES.COMPLETE) {
-                                isSending.value = false;
+                                setSending(chatId, false);
                             }
                         } catch (e) {
                             console.warn('解析剩余数据失败:', cleanBuffer, e);
@@ -424,7 +456,7 @@ createApp({
                     }
                 }
 
-                isSending.value = false;
+                setSending(chatId, false);
                 currentStreamContentDiv = null;
                 currentThinkingContentDiv = null;
                 currentThinkingSectionDiv = null;
@@ -436,7 +468,7 @@ createApp({
                     aiMsg.content += '\n\n⚠️ 请求出错: ' + error.message;
                     updateStreamContent(aiMsg.content);
                 }
-                isSending.value = false;
+                setSending(chatId, false);
                 abortController = null;
                 currentStreamContentDiv = null;
                 currentThinkingContentDiv = null;
@@ -445,7 +477,7 @@ createApp({
             }
         };
 
-        const processStreamData = (data, aiMsg, thinkingContent) => {
+        const processStreamData = (data, aiMsg, thinkingContent, chatId) => {
             if (data.type === STREAM_TYPES.TEXT && data.content) {
                 if (aiMsg.hasThinking) {
                     aiMsg.showThinking = false;
@@ -506,7 +538,7 @@ createApp({
                     console.warn('解析recommend失败:', e, '原始数据:', data.content);
                 }
             } else if (data.type === STREAM_TYPES.COMPLETE) {
-                isSending.value = false;
+                setSending(chatId, false);
                 currentRecommendMsgId.value = aiMsg.id;
                 currentStreamContentDiv = null;
                 currentThinkingContentDiv = null;
@@ -525,7 +557,7 @@ createApp({
 
             await APP_API.stopStream(backendUrl.value, currentChatId.value);
 
-            isSending.value = false;
+            setSending(currentChatId.value, false);
             currentStreamContentDiv = null;
             currentThinkingContentDiv = null;
             currentThinkingSectionDiv = null;
@@ -630,6 +662,13 @@ createApp({
             return inputMessage.value.trim().length > 0 || selectedFile.value;
         });
 
+        const inputPlaceholder = computed(() => {
+            if (selectedAgent.value === 'file' && selectedFile.value) {
+                return '文件问答模式... (删除文件可切换回对话助手)';
+            }
+            return '输入希望进行深度研究的问题';
+        });
+
         const scrollToBottom = () => {
             return nextTick(() => {
                 if (messagesContainer.value) {
@@ -673,6 +712,8 @@ createApp({
             isSending,
             currentRecommendMsgId,
             canSend,
+            inputPlaceholder,
+            researchDepth,
             messagesContainer,
             textareaInput,
             selectAgent,
@@ -684,6 +725,8 @@ createApp({
             deleteChat,
             removeFile,
             handleFileSelect,
+            handleHomeFileSelect,
+            handleChatFileSelect,
             sendMessage,
             stopMessage,
             toggleThinking,

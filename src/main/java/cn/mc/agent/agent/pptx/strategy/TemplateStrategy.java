@@ -57,7 +57,11 @@ public class TemplateStrategy implements PptStateStrategy {
                 });
 
         try {
-            String json = context.getChatModel().call(new Prompt(prompt)).getResult().getOutput().getText();
+            var callResult = context.getChatModel().call(new Prompt(prompt)).getResult();
+            if (callResult == null || callResult.getOutput() == null) {
+                throw new IllegalStateException("模型返回为空");
+            }
+            String json = callResult.getOutput().getText();
             TemplateSelectionResult result = converter.convert(json);
 
             log.info("模板选择结果: templateCode={}, reason={}", result.getTemplateCode(), result.getReason());

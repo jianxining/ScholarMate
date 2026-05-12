@@ -178,6 +178,11 @@ public class SimpleReactAgent {
                     .call()
                     .chatClientResponse();
 
+            if (chatResponse.chatResponse() == null || chatResponse.chatResponse().getResult() == null
+                    || chatResponse.chatResponse().getResult().getOutput() == null) {
+                throw new IllegalStateException("模型返回为空，请重试");
+            }
+
             String aiText = chatResponse.chatResponse().getResult().getOutput().getText();
 
             AssistantMessage.Builder builder = AssistantMessage.builder().content(aiText);
@@ -671,6 +676,11 @@ public class SimpleReactAgent {
                     .messages(messages)
                     .call()
                     .chatClientResponse();
+
+            if (chatResponse.chatResponse() == null || chatResponse.chatResponse().getResult() == null
+                    || chatResponse.chatResponse().getResult().getOutput() == null) {
+                throw new IllegalStateException("模型返回为空，请重试");
+            }
 
             AssistantMessage.Builder builder = AssistantMessage.builder().content(chatResponse.chatResponse().getResult().getOutput().getText());
 

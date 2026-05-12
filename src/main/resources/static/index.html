@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScholarMate</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎓</text></svg>">
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Vue 3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Marked.js for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Highlight.js for code syntax highlighting -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <!-- DOMPurify for XSS protection -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <!-- 图标库 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div id="app">
+        <div class="container">
+            <!-- 左侧边栏 -->
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <div class="brand">
+                        <img src="logo-temp.png" alt="ScholarMate" class="brand-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                        <div class="brand-logo-fallback" style="display:none">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#2B6CB0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <span class="brand-name">ScholarMate</span>
+                    </div>
+                </div>
+
+                <button class="new-chat-btn" @click="createNewChat">
+                    <i class="fas fa-plus"></i>
+                    <span>新对话</span>
+                </button>
+
+                <div class="sidebar-nav">
+                    <div class="nav-item active">
+                        <i class="fas fa-search"></i>
+                        <span>主页</span>
+                    </div>
+                    <div class="nav-item" @click="createNewChat">
+                        <i class="fas fa-comment-dots"></i>
+                        <span>对话助手</span>
+                    </div>
+                    <div class="nav-item">
+                        <i class="fas fa-book-open"></i>
+                        <span>文件问答</span>
+                    </div>
+                    <div class="nav-item">
+                        <i class="fas fa-flask"></i>
+                        <span>深度研究</span>
+                    </div>
+                </div>
+
+                <div class="chat-history">
+                    <div class="history-header">
+                        <span>历史记录</span>
+                        <i class="fas fa-layer-group"></i>
+                    </div>
+                    <div class="chat-list">
+                        <div v-for="chat in chatList" :key="chat.id"
+                             :class="['chat-item', { active: currentChatId === chat.id }]"
+                             @click="selectChat(chat.id)">
+                            <span class="chat-title">{{ chat.title }}</span>
+                            <span v-if="streamingChatId === chat.id" class="streaming-indicator">
+                                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                            </span>
+                            <span v-if="!chat.isNew" class="delete-btn" @click.stop="deleteChat(chat.id)">
+                                <i class="fas fa-trash-alt"></i>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-footer">
+                    <div class="footer-item">
+                        <i class="fas fa-mobile-alt"></i>
+                        <span>手机端</span>
+                    </div>
+                    <div class="footer-item">
+                        <i class="fas fa-ellipsis-h"></i>
+                        <span>更多</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧主区域 -->
+            <div class="main-content">
+                <!-- 空状态（首页） -->
+                <div v-if="!currentChat || currentChat.messages.length === 0" class="home-view">
+                    <div class="home-brand">
+                        <img src="logo-temp.png" alt="ScholarMate" class="home-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                        <div class="home-logo-fallback" style="display:none">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#2B6CB0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <h1 class="home-title">ScholarMate</h1>
+                    </div>
+                    <p class="home-subtitle">没有广告，直达结果</p>
+
+                    <!-- 功能标签栏 -->
+                    <div class="feature-tabs">
+                        <div v-for="agent in agents" :key="agent.id"
+                             :class="['feature-tab', { active: selectedAgent === agent.id }]"
+                             @click="selectAgent(agent.id)">
+                            <i :class="agent.icon"></i>
+                            <span>{{ agent.name }}</span>
+                        </div>
+                    </div>
+
+                    <!-- 输入框 -->
+                    <div class="input-wrapper">
+                        <div class="input-box">
+                            <textarea v-model="inputMessage"
+                                      :placeholder="inputPlaceholder"
+                                      @keydown.enter.exact.prevent="sendMessage"
+                                      @keydown.enter.shift.exact="inputMessage += '\n'"
+                                      rows="1"
+                                      ref="textareaInput"></textarea>
+                            <div class="input-toolbar">
+                                <div class="toolbar-left">
+                                    <button class="toolbar-btn" title="上传文件" @click="$refs.homeFileInput.click()">
+                                        <i class="fas fa-camera"></i>
+                                    </button>
+                                    <input ref="homeFileInput" type="file" @change="handleHomeFileSelect" style="display: none;">
+                                </div>
+                                <div class="toolbar-right">
+                                    <button :class="['send-btn-circle', { active: canSend }]"
+                                            @click="isSending ? stopMessage() : sendMessage()"
+                                            :disabled="isSending ? false : !canSend">
+                                        <i v-if="isSending" class="fas fa-stop"></i>
+                                        <i v-else class="fas fa-arrow-up"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 研究深度三段式 -->
+                    <div class="depth-selector">
+                        <div :class="['depth-item', { active: researchDepth === 'concise' }]"
+                             @click="researchDepth = 'concise'">
+                            简洁
+                        </div>
+                        <div :class="['depth-item', { active: researchDepth === 'deep' }]"
+                             @click="researchDepth = 'deep'">
+                            深入
+                        </div>
+                        <div :class="['depth-item', { active: researchDepth === 'research' }]"
+                             @click="researchDepth = 'research'">
+                            深度研究
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 对话视图 -->
+                <div v-else class="chat-view">
+                    <div class="messages-container" ref="messagesContainer">
+                        <div v-for="(msg, index) in currentChat?.messages || []" :key="index" :class="['message', msg.role]">
+                            <div class="message-avatar">
+                                <span v-if="msg.role === 'user'">你</span>
+                                <span v-else>S</span>
+                            </div>
+                            <div class="message-content">
+                                <!-- 用户消息 -->
+                                <div v-if="msg.role === 'user'" class="user-message">
+                                    <span v-if="msg.file" class="file-attachment">
+                                        <i class="fas fa-paperclip"></i>
+                                        {{ msg.fileName }}
+                                    </span>
+                                    <div>{{ msg.content }}</div>
+                                </div>
+
+                                <!-- Copy 按钮 -->
+                                <div v-if="msg.role === 'user'" class="copy-btn copy-btn-user" @click="copyMessage(msg)">
+                                    <i v-if="!msg.copied" class="fas fa-copy"></i>
+                                    <i v-else class="fas fa-check"></i>
+                                </div>
+
+                                <!-- AI 消息 -->
+                                <div v-else class="ai-message">
+                                    <!-- 思考过程 -->
+                                    <div v-show="msg.hasThinking" class="thinking-section">
+                                        <div class="thinking-header" @click="toggleThinking(msg.id)">
+                                            <div class="thinking-icon-wrapper">
+                                                <i class="fas fa-brain thinking-icon"></i>
+                                            </div>
+                                            <span class="thinking-title">思考过程</span>
+                                            <i :class="['fas', msg.showThinking ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
+                                        </div>
+                                        <div v-show="msg.showThinking" class="thinking-content">
+                                            <div class="thinking-text">{{ msg.thinking.join('') }}</div>
+                                        </div>
+                                    </div>
+
+                                    <!-- 文本内容 -->
+                                    <div class="text-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
+
+                                    <!-- 加载动画 -->
+                                    <div v-if="isSending && isLastMessage(msg)" class="thinking-loading">
+                                        <span class="dot"></span>
+                                        <span class="dot"></span>
+                                        <span class="dot"></span>
+                                    </div>
+
+                                    <!-- 参考链接 -->
+                                    <div v-if="msg.reference && msg.reference.length > 0" class="reference-section">
+                                        <div class="reference-header" @click="toggleReference(msg.id)">
+                                            <div class="reference-icon-wrapper">
+                                                <i class="fas fa-book reference-icon"></i>
+                                            </div>
+                                            <span class="reference-title">参考来源 ({{ msg.reference.length }})</span>
+                                            <i :class="['fas', msg.showReference ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
+                                        </div>
+                                        <div v-show="msg.showReference" class="reference-content">
+                                            <template v-for="(ref, rIndex) in msg.reference" :key="rIndex">
+                                                <a v-if="ref && ref.url"
+                                                   :href="ref.url" target="_blank" class="reference-link">
+                                                    <div class="ref-icon">
+                                                        <i class="fas fa-external-link-alt"></i>
+                                                    </div>
+                                                    <div class="ref-info">
+                                                        <div class="ref-title-text">{{ ref.title || '无标题' }}</div>
+                                                        <div class="ref-url-text">{{ ref.url }}</div>
+                                                    </div>
+                                                </a>
+                                            </template>
+                                        </div>
+                                    </div>
+
+                                    <!-- 推荐问题 -->
+                                    <div v-if="msg.recommend && msg.recommend.length > 0" class="recommend-section">
+                                        <div class="recommend-items">
+                                            <div v-for="(question, qIndex) in msg.recommend" :key="qIndex"
+                                                 class="recommend-item"
+                                                 @click="sendRecommendQuestion(question)">
+                                                <div class="recommend-icon">
+                                                    <i class="fas fa-lightbulb"></i>
+                                                </div>
+                                                <div class="recommend-text">{{ question }}</div>
+                                                <div class="recommend-arrow">
+                                                    <i class="fas fa-arrow-right"></i>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Copy 按钮 -->
+                                    <div class="copy-btn" @click="copyMessage(msg)">
+                                        <i v-if="!msg.copied" class="fas fa-copy"></i>
+                                        <i v-else class="fas fa-check"></i>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 对话模式下的输入区 -->
+                    <div class="chat-input-area">
+                        <div class="input-wrapper">
+                            <div class="input-box">
+                                <textarea v-model="inputMessage"
+                                          placeholder="输入消息... (支持 Markdown，Shift+Enter 换行)"
+                                          @keydown.enter.exact.prevent="sendMessage"
+                                          @keydown.enter.shift.exact="inputMessage += '\n'"
+                                          rows="1"
+                                          ref="textareaInput"></textarea>
+                                <div class="input-toolbar">
+                                    <div class="toolbar-left">
+                                        <button class="toolbar-btn" title="上传文件" @click="$refs.chatFileInput.click()">
+                                            <i class="fas fa-camera"></i>
+                                        </button>
+                                        <input ref="chatFileInput" type="file" @change="handleChatFileSelect" style="display: none;">
+                                    </div>
+                                    <div class="toolbar-right">
+                                        <button :class="['send-btn-circle', { active: canSend }]"
+                                                @click="isSending ? stopMessage() : sendMessage()"
+                                                :disabled="isSending ? false : !canSend">
+                                            <i v-if="isSending" class="fas fa-stop"></i>
+                                            <i v-else class="fas fa-arrow-up"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 连接状态提示 -->
+        <div v-if="connectionError" class="connection-error">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span>{{ connectionError }}</span>
+            <button @click="testConnection" class="retry-btn">重试</button>
+        </div>
+
+        <!-- 自定义确认对话框 -->
+        <div v-if="showConfirmDialog" class="confirm-dialog-overlay">
+            <div class="confirm-dialog">
+                <div class="confirm-icon">
+                    <i class="fas fa-exclamation-circle"></i>
+                </div>
+                <h3>{{ confirmTitle }}</h3>
+                <p>{{ confirmMessage }}</p>
+                <div class="confirm-buttons">
+                    <button class="confirm-btn cancel" @click="confirmCancel">取消</button>
+                    <button class="confirm-btn danger" @click="confirmOk">确认删除</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 配置和工具模块 -->
+    <script src="js/config.js"></script>
+    <script src="js/constants.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/api.js"></script>
+    <!-- 主应用 -->
+    <script src="js/app.js"></script>
+</body>
+</html>

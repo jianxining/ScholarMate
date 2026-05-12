@@ -1,0 +1,1 @@
+ALTER TABLE ai_session ADD COLUMN summary TEXT COMMENT '执行后摘要，用于跨轮次中期记忆';
